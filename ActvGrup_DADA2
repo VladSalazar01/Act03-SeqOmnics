@@ -1,0 +1,62 @@
+#DADA2
+###Instalar librerias
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+if (!requireNamespace("dada2", quietly = TRUE))
+  BiocManager::install("dada2", version = "3.21")
+####Cargar librerias
+
+library("dada2")
+library("stats")
+library("BiocParallel")
+library("R.utils")
+
+####DADA2 PIPELINE 2.0 
+
+#Establecer ruta a archivos limpios
+
+setwd("G:/My Drive/Maestria/Base de Datos_ Secuenciacion/Base de Datos")
+getwd()
+
+path <- ("G:/My Drive/Maestria/Base de Datos_ Secuenciacion/Base de Datos")
+list.files(path)
+
+
+#Los archivos forward y reverse tienen el formato: _1.fastaq.gz y _2.fastaq.gz
+
+fnFs <- sort(list.files(path, pattern="_1.fastq.gz", full.names = TRUE)) #para correr despues de trimmomatic_
+print(fnFs)
+print(length(fnFs))
+
+fnRs <- sort(list.files(path, pattern="_2.fastq.gz", full.names = TRUE))
+print(fnRs)
+
+#Extraer los nombres de las muestras 
+sample.names <- sapply(strsplit(basename(fnFs), "_S"), `[`, 1)
+print(sample.names)
+
+print(fnFs)
+print(length(fnFs))
+
+#Inspect read quality profiles
+plotQualityProfile(fnFs[1:10]) # [1:20]
+plotQualityProfile(fnRs[1:10])
+dev.new()
+
+
+# Trimming
+# Place filtered files in filtered/ subdirectory
+filtFs <- file.path(path, "filtered", paste0(sample.names, "_F_filt.fastq.gz"))
+filtRs <- file.path(path, "filtered", paste0(sample.names, "_R_filt.fastq.gz"))
+names(filtFs) <- sample.names
+names(filtRs) <- sample.names
+
+out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs,
+                     maxN=0, maxEE=c(2,2), truncQ=2, rm.phix=TRUE,
+                     compress=TRUE, multithread=TRUE)                  
+errF <- learnErrors(filtFs, multithread=TRUE)
+errR <- learnErrors(filtRs, multithread=TRUE)
+
+#Plot error
+plotErrors(errF, nominalQ=TRUE)
