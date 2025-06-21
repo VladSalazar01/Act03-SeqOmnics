@@ -47,7 +47,6 @@ print (sample.names)
 
 ```{r filtrado}
 
-
 plotQualityProfile(fnFs[1:12])
 plotQualityProfile(fnRs[1:12])
 
@@ -66,39 +65,21 @@ out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs,
 ## 4. Aprender errores y denoising
 
 ```{r errores_denoise}
-errF <- learnErrors(filtFs, multithread=FALSE)
-errR <- learnErrors(filtRs, multithread=FALSE)
 
-derepFs <- derepFastq(filtFs, verbose=TRUE)
-derepRs <- derepFastq(filtRs, verbose=TRUE)
-
-names(derepFs) <- sample.names
-names(derepRs) <- sample.names
-
-dadaFs <- dada(derepFs, err=errF, multithread=FALSE)
-dadaRs <- dada(derepRs, err=errR, multithread=FALSE)
 ```
 
 ## 5. Merge, tabla de secuencias y remoción de quimeras
 
 ```{r merge_seqtab}
-mergers <- mergePairs(dadaFs, derepFs, dadaRs, derepRs, verbose=TRUE)
-seqtab <- makeSequenceTable(mergers)
-seqtab.nochim <- removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, verbose=TRUE)
+
+
 ```
 
 ## 6. Tabla de seguimiento de secuencias
 
 ```{r seguimiento}
-getN <- function(x) sum(getUniques(x))
-track <- cbind(out, 
-               sapply(dadaFs, getN), 
-               sapply(dadaRs, getN), 
-               sapply(mergers, getN), 
-               rowSums(seqtab.nochim))
-colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
-rownames(track) <- sample.names
-kable(as.data.frame(track), caption = "Tabla de seguimiento de lecturas por muestra")
+
+
 ```
 
 ## 7. Asignación taxonómica con SILVA
