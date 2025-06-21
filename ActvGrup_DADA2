@@ -86,23 +86,12 @@ dadaRs <- dada(derepRs, err=errR, multithread=TRUE)
 
 save.image(file="G:/My Drive/Maestria/Base de Datos_ Secuenciacion/Lecturas FASTq - Copy")
 
-
 dadaPFs <- dada(derepFs, err=errF, multithread=TRUE, pool=TRUE)  
 dadaPRs <- dada(derepRs, err=errR, multithread=TRUE, pool=TRUE)
-
-#Inspect returned class object
-dadaFs[[9]]
-dadaRs[[9]]
-dadaPFs[[9]]
-dadaPRs[[9]]
 
 #Merge paired reads to obtain the full denoised sequences
 mergers <- mergePairs(dadaFs, derepFs, dadaRs, derepRs, verbose=TRUE)  #con dereplicacion
 mergersP <- mergePairs(dadaPFs, derepFs, dadaPRs, derepRs, verbose=TRUE)
-
-# Inspect the merger data.frame from the first sample
-head(mergers[[9]])
-head(mergersP[[9]])
 
 #Construct sequence table
 seqtab <- makeSequenceTable(mergers)
@@ -149,3 +138,15 @@ trackP
 saveRDS(track,"G:/My Drive/Maestria/Base de Datos_ Secuenciacion/Lecturas FASTq - Copy")
 save.image(file="G:/My Drive/Maestria/Base de Datos_ Secuenciacion/Lecturas FASTq - Copy")
 
+#  CARGAR BASE DE DATOS SILVA Y ASIGNAR TAXONOMÍA
+silva.ref <- "base_silva/silva_nr99_v138.1_train_set.fa.gz"  # Ruta al archivo fasta SILVA
+taxa <- assignTaxonomy(seqtab.nochim, silva.ref, multithread=TRUE)
+saveRDS(taxa, file.path("resultados", "taxonomia_silva.rds"))
+
+# ESPECIES - si tienes el archivo de especies de SILVA
+silva.species <- "base_silva/silva_species_assignment_v138.1.fa.gz"
+taxa <- addSpecies(taxa, silva.species)
+saveRDS(taxa, file.path("resultados", "taxonomia_silva_con_especies.rds"))
+
+# GUARDAR COMO CSV
+write.csv(as.data.frame(taxa), file.path("resultados", "tabla_taxonomica.csv"))
