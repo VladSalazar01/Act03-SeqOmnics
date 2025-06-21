@@ -1,0 +1,189 @@
+
+---
+title: "Análisis metagenómico 16S con DADA2"
+author: "Tu Nombre"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 1. Cargar paquetes
+
+```{r paquetes}
+library(dada2)
+library(phyloseq)
+library(vegan)
+library(ggplot2)
+library(BiocParallel)
+library(tidyverse)
+library(knitr)
+```
+
+## 2. Establecer directorio y cargar archivos
+
+```{r directorio}
+path <- "G:/My Drive/Maestria/Base de Datos_ Secuenciacion/Lecturas FASTq"
+list.files(path)
+
+fnFs <- sort(list.files(path, pattern="_1.fastq.gz", full.names = TRUE))
+print(fnFs)
+fnRs <- sort(list.files(path, pattern="_2.fastq.gz", full.names = TRUE))
+print(fnRs)
+
+baseF <- sub("_1.fastq.gz$", "", basename(fnFs))
+baseR <- sub("_2.fastq.gz$", "", basename(fnRs))
+paired <- intersect(baseF, baseR)
+
+sample.names <- sapply(paired, function(x) {
+  parts <- unlist(strsplit(x, "_"))
+  paste(parts[1], parts[2], sep="_")
+})
+print (sample.names)
+```
+
+## 3. Calidad, Filtrado y recorte
+
+```{r filtrado}
+
+
+plotQualityProfile(fnFs[1:12])
+plotQualityProfile(fnRs[1:12])
+
+filtFs <- file.path(path, "filtered", paste0(sample.names, "_F_filt.fastq.gz"))
+filtRs <- file.path(path, "filtered", paste0(sample.names, "_R_filt.fastq.gz"))
+
+names(filtFs) <- sample.names
+names(filtRs) <- sample.names
+
+out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs,
+                     truncLen=c(240, 200),
+                     maxN=0, maxEE=c(2,2), truncQ=2,
+                     rm.phix=TRUE, compress=TRUE, multithread=FALSE)
+```
+
+## 4. Aprender errores y denoising
+
+```{r errores_denoise}
+errF <- learnErrors(filtFs, multithread=FALSE)
+errR <- learnErrors(filtRs, multithread=FALSE)
+
+derepFs <- derepFastq(filtFs, verbose=TRUE)
+derepRs <- derepFastq(filtRs, verbose=TRUE)
+
+names(derepFs) <- sample.names
+names(derepRs) <- sample.names
+
+dadaFs <- dada(derepFs, err=errF, multithread=FALSE)
+dadaRs <- dada(derepRs, err=errR, multithread=FALSE)
+```
+
+## 5. Merge, tabla de secuencias y remoción de quimeras
+
+```{r merge_seqtab}
+mergers <- mergePairs(dadaFs, derepFs, dadaRs, derepRs, verbose=TRUE)
+seqtab <- makeSequenceTable(mergers)
+seqtab.nochim <- removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, verbose=TRUE)
+```
+
+## 6. Tabla de seguimiento de secuencias
+
+```{r seguimiento}
+getN <- function(x) sum(getUniques(x))
+track <- cbind(out, 
+               sapply(dadaFs, getN), 
+               sapply(dadaRs, getN), 
+               sapply(mergers, getN), 
+               rowSums(seqtab.nochim))
+colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
+rownames(track) <- sample.names
+kable(as.data.frame(track), caption = "Tabla de seguimiento de lecturas por muestra")
+```
+
+## 7. Asignación taxonómica con SILVA
+
+```{r taxonomia}
+taxa <- assignTaxonomy(seqtab.nochim, 
+                       "G:/My Drive/Maestria/Base de Datos_ Secuenciacion/silva_nr99_v138.1_train_set.fa.gz",
+                       multithread=TRUE)
+taxa <- addSpecies(taxa,
+                   "G:/My Drive/Maestria/Base de Datos_ Secuenciacion/silva_species_assignment_v138.1.fa.gz")
+```
+
+## 8. Crear objeto phyloseq
+
+```{r phyloseq}
+ps <- phyloseq(otu_table(seqtab.nochim, taxa_are_rows=FALSE),
+               tax_table(taxa))
+
+sampledata <- data.frame(
+  sample = sample.names,
+  tratamiento = sapply(strsplit(sample.names, "_"), `[`, 1)
+)
+rownames(sampledata) <- sample.names
+sample_data(ps) <- sampledata
+```
+
+## 9. Abundancia relativa por Phylum
+
+```{r abundancia}
+ps_rel <- transform_sample_counts(ps, function(x) x / sum(x))
+
+plot_bar(ps_rel, x="tratamiento", fill="Phylum") +
+  theme_minimal() +
+  labs(title="Abundancia relativa por Phylum")
+```
+
+## 10. Diversidad Alfa
+
+```{r alfa}
+plot_richness(ps, x="tratamiento", measures=c("Shannon", "Observed", "Simpson")) +
+  theme_minimal()
+
+alpha_div <- estimate_richness(ps)
+alpha_div$tratamiento <- sample_data(ps)$tratamiento
+kruskal.test(Shannon ~ tratamiento, data=alpha_div)
+```
+
+## 11. Diversidad Beta y PCoA
+
+```{r beta}
+ordu <- ordinate(ps, method="PCoA", distance="bray")
+plot_ordination(ps, ordu, color="tratamiento") +
+  geom_point(size=4) +
+  theme_minimal() +
+  labs(title="PCoA - Bray-Curtis")
+```
+
+## 12. PERMANOVA
+
+```{r permanova}
+otu_mat <- as(otu_table(ps), "matrix")
+otu_mat <- otu_mat[rowSums(otu_mat) > 0, ]
+sample_df <- data.frame(sample_data(ps))
+adonis2(vegdist(otu_mat, method="bray") ~ tratamiento, data=sample_df)
+```
+
+## 13. Curvas de Rarefacción
+
+```{r rarefaccion}
+raremax <- min(rowSums(otu_mat))
+rarecurve_result <- rarecurve(otu_mat, step=100, sample=raremax, label=FALSE)
+
+rare_df <- bind_rows(lapply(1:length(rarecurve_result), function(i) {
+  data.frame(
+    Reads = attr(rarecurve_result[[i]], "Subsample"),
+    Richness = rarecurve_result[[i]],
+    Sample = names(rarecurve_result)[i],
+    Tratamiento = sample_data(ps)$tratamiento[match(names(rarecurve_result)[i], rownames(sample_data(ps)))]
+  )
+}))
+
+ggplot(rare_df, aes(x=Reads, y=Richness, color=Tratamiento, group=Sample)) +
+  geom_line(size=1) +
+  theme_minimal() +
+  labs(title="Curvas de Rarefacción",
+       x="Número de lecturas",
+       y="ASVs observadas")
+```
