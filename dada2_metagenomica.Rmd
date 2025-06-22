@@ -65,20 +65,70 @@ out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs,
 ## 4. Aprender errores y denoising
 
 ```{r errores_denoise}
+errF <- learnErrors(filtFs, multithread=TRUE)
+errR <- learnErrors(filtRs, multithread=TRUE)
 
+dadaFs <- dada(derepFs, err=errF, multithread=TRUE)  #continuando el proceso luego de la dereplicacion añadir pool=TRUE
+dadaRs <- dada(derepRs, err=errR, multithread=TRUE)
+
+dadaPFs <- dada(derepFs, err=errF, multithread=TRUE, pool=TRUE)  
+dadaPRs <- dada(derepRs, err=errR, multithread=TRUE, pool=TRUE)
 ```
 
 ## 5. Merge, tabla de secuencias y remoción de quimeras
 
 ```{r merge_seqtab}
-
+mergers <- mergePairs(dadaFs, derepFs, dadaRs, derepRs, verbose=TRUE)  #con dereplicacion
+mergersP <- mergePairs(dadaPFs, derepFs, dadaPRs, derepRs, verbose=TRUE)
 
 ```
 
 ## 6. Tabla de seguimiento de secuencias
 
 ```{r seguimiento}
+seqtab <- makeSequenceTable(mergers)
+seqtabP <- makeSequenceTable(mergersP)
 
+## The sequences being tabled vary in length.
+dim(seqtab)
+dim(seqtabP)
+
+#Inspect distribution of sequence lengths
+table(nchar(getSequences(seqtab)))
+table(nchar(getSequences(seqtabP)))
+
+#Remove chimeras
+seqtab.nochim <- removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, verbose=TRUE)
+dim(seqtab.nochim)
+sum(seqtab.nochim)/sum(seqtab)
+
+seqtab.nochimP <- removeBimeraDenovo(seqtabP, method="consensus", multithread=TRUE, verbose=TRUE)
+dim(seqtab.nochimP)
+sum(seqtab.nochimP)/sum(seqtabP)
+
+#Track reads trough pipeline
+getN <- function(x) sum(getUniques(x))
+track <- cbind(out, sapply(dadaFs, getN), sapply(dadaRs, getN), sapply(mergers, getN), rowSums(seqtab.nochim))
+
+getN <- function(x) sum(getUniques(x))
+trackP <- cbind(out, sapply(dadaPFs, getN), sapply(dadaPRs, getN), sapply(mergersP, getN), rowSums(seqtab.nochimP))
+
+# If processing a single sample, remove the sapply calls: e.g. replace sapply(dadaFs, getN) with getN(dadaFs)
+
+colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
+rownames(track) <- sample.names
+head(track)
+track
+
+colnames(trackP) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
+
+rownames(trackP) <- sample.names
+head(trackP)
+trackP
+save(dadaFs, dadaRs, dadaPFs, dadaPRs, mergers, mergersP,
+     seqtab, seqtabP, seqtab.nochim, seqtab.nochimP,
+     track, trackP,
+     file = "dada2_resultados.RData")
 
 ```
 
