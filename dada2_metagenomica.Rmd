@@ -1,220 +1,351 @@
-
 ---
 title: "Análisis metagenómico 16S con DADA2"
-author: "Tu Nombre"
-output: html_document
+author: "Vladimir Salazar"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    Smooth_scroll: true
+    number_sections: true
+    theme: lumen
+    highlight: tango
+    df_print: paged
+    code_folding: hide
+    keep_md: true
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
+# Configuración Inicial
+```{r setup1, include=FALSE}
+# Instalar librerC-as si es necesario
+defaults <- function() {
+  if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+  if (!requireNamespace("dada2", quietly = TRUE))
+    BiocManager::install("dada2", version = "3.20")
+}
+defaults()
 
-## 1. Cargar paquetes
-
-```{r paquetes}
+# Cargar librerC-as
 library(dada2)
-library(phyloseq)
-library(vegan)
-library(ggplot2)
+library(stats)
 library(BiocParallel)
-library(tidyverse)
-library(knitr)
+library(R.utils)
+library(parallel)  # Para detecciC3n de nC:cleos
+
+# Detectar nC:mero de nC:cleos disponibles
+nc <- detectCores(logical = FALSE)
+message("Usando ", nc, " nC:cleos fC-sicos para el procesamiento paralelo.")
+
+# Configurar el backend paralelo (en Windows, usar SnowParam)
+bpp <- SnowParam(workers = nc, type = "SOCK")
+register(bpp, default = TRUE)
+
+# Directorio de trabajo y archivos
+dir <- "C:/Users/VladM/Documents/DEunir/1Cuatrim/seqyOmnics/Actividades/Actividad 3/seq_Act03WD_al03"
+setwd(dir)
+
 ```
 
-## 2. Establecer directorio y cargar archivos
+# Carga y Preparación de Datos
 
-```{r directorio}
-path <- "G:/My Drive/Maestria/Base de Datos_ Secuenciacion/Lecturas FASTq"
-list.files(path)
-
-fnFs <- sort(list.files(path, pattern="_1.fastq.gz", full.names = TRUE))
+Cargamos los archivos de secuenciación, extraemos nombres de muestras y revisamos la calidad de las secuencias.
+```{r setup2, include=FALSE}
+fnFs <- sort(list.files(dir, pattern = "_1.fastq.gz$", full.names = TRUE))
 print(fnFs)
-fnRs <- sort(list.files(path, pattern="_2.fastq.gz", full.names = TRUE))
+fnRs <- sort(list.files(dir, pattern = "_2.fastq.gz$", full.names = TRUE))
 print(fnRs)
 
-baseF <- sub("_1.fastq.gz$", "", basename(fnFs))
-baseR <- sub("_2.fastq.gz$", "", basename(fnRs))
+# Extraer nombres de muestras
+auto_names <- function(files, suffix) {
+  sub(suffix, "", basename(files))
+}
+baseF <- auto_names(fnFs, "_1.fastq.gz$")
+baseR <- auto_names(fnRs, "_2.fastq.gz$")
 paired <- intersect(baseF, baseR)
+sample.names <- sapply(paired, function(x) paste(unlist(strsplit(x, "_"))[1:2], collapse = "_"))
+print(sample.names)
 
-sample.names <- sapply(paired, function(x) {
-  parts <- unlist(strsplit(x, "_"))
-  paste(parts[1], parts[2], sep="_")
-})
-print (sample.names)
+# InspecciC3n de calidad (opcional)
+plotQualityProfile(fnFs[1:min(12, length(fnFs))])
+plotQualityProfile(fnRs[1:min(12, length(fnRs))])
+
 ```
 
-## 3. Calidad, Filtrado y recorte
+# Filtrado y Trimming
 
-```{r filtrado}
+Creamos un directorio para archivos filtrados y aplicamos filtrado y recorte a las secuencias.
 
-plotQualityProfile(fnFs[1:12])
-plotQualityProfile(fnRs[1:12])
+```{r setup3, include=FALSE}
+# Crear directorio filtered si no existe
+filt_path <- file.path(dir, "filtered")
+if (!dir.exists(filt_path)) dir.create(filt_path)
 
-filtFs <- file.path(path, "filtered", paste0(sample.names, "_F_filt.fastq.gz"))
-filtRs <- file.path(path, "filtered", paste0(sample.names, "_R_filt.fastq.gz"))
-
+# Generar nombres de archivos filtrados
+filtFs <- file.path(filt_path, paste0(sample.names, "_F_filt.fastq.gz"))
 names(filtFs) <- sample.names
+filtRs <- file.path(filt_path, paste0(sample.names, "_R_filt.fastq.gz"))
 names(filtRs) <- sample.names
 
+# Filtrado y trimming con multithread = nC:mero de nC:cleos
 out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs,
-                     truncLen=c(240, 200),
-                     maxN=0, maxEE=c(2,2), truncQ=2,
-                     rm.phix=TRUE, compress=TRUE, multithread=FALSE)
-```
-
-## 4. Aprender errores y denoising
-
-```{r errores_denoise}
-errF <- learnErrors(filtFs, multithread=TRUE)
-errR <- learnErrors(filtRs, multithread=TRUE)
-
-dadaFs <- dada(derepFs, err=errF, multithread=TRUE)  #continuando el proceso luego de la dereplicacion añadir pool=TRUE
-dadaRs <- dada(derepRs, err=errR, multithread=TRUE)
-
-dadaPFs <- dada(derepFs, err=errF, multithread=TRUE, pool=TRUE)  
-dadaPRs <- dada(derepRs, err=errR, multithread=TRUE, pool=TRUE)
-```
-
-## 5. Merge, tabla de secuencias y remoción de quimeras
-
-```{r merge_seqtab}
-mergers <- mergePairs(dadaFs, derepFs, dadaRs, derepRs, verbose=TRUE)  #con dereplicacion
-mergersP <- mergePairs(dadaPFs, derepFs, dadaPRs, derepRs, verbose=TRUE)
+                     truncLen = c(200, 180),   # antes 240/200
+                     maxN = 0, maxEE = c(2,2), truncQ = 2,
+                     rm.phix = TRUE, compress = TRUE,
+                     multithread = nc)
 
 ```
 
-## 6. Tabla de seguimiento de secuencias
+# Aprendizaje de Errores y Dereplicación
 
-```{r seguimiento}
-seqtab <- makeSequenceTable(mergers)
-seqtabP <- makeSequenceTable(mergersP)
+Aprendemos los errores de las secuencias y realizamos la dereplicación.
 
-## The sequences being tabled vary in length.
-dim(seqtab)
-dim(seqtabP)
+```{r setup4, include=FALSE}
+# Aprender errores en paralelo
+errF <- learnErrors(filtFs, multithread = nc )
+errR <- learnErrors(filtRs, multithread = nc)
 
-#Inspect distribution of sequence lengths
-table(nchar(getSequences(seqtab)))
-table(nchar(getSequences(seqtabP)))
+# Visualizar errores (opcional)
+plotErrors(errF, nominalQ = TRUE)
 
-#Remove chimeras
-seqtab.nochim <- removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, verbose=TRUE)
-dim(seqtab.nochim)
-sum(seqtab.nochim)/sum(seqtab)
+# DereplicaciC3n
+derepFs <- derepFastq(filtFs, verbose = TRUE)
+derepRs <- derepFastq(filtRs, verbose = TRUE)
+names(derepFs) <- sample.names
+names(derepRs) <- sample.names
+```
 
-seqtab.nochimP <- removeBimeraDenovo(seqtabP, method="consensus", multithread=TRUE, verbose=TRUE)
-dim(seqtab.nochimP)
-sum(seqtab.nochimP)/sum(seqtabP)
+# Inferencia DADA2 y Fusión de Pares
 
-#Track reads trough pipeline
+Realizamos la inferencia de variantes con DADA2 y fusionamos las lecturas pareadas.
+
+```{r setup5, include=FALSE}
+# Inferencia DADA (pooled y no-pooled) en paralelo
+dadaFs <- dada(derepFs, err = errF, multithread = nc)   # idem
+dadaRs <- dada(derepRs, err = errR, multithread = nc)
+
+dadaPFs <- dada(derepFs, err = errF, multithread = nc, pool = TRUE)
+dadaPRs <- dada(derepRs, err = errR, multithread = nc, pool = TRUE)
+
+# Merge paired reads
+mergers   <- mergePairs(dadaFs, derepFs, dadaRs, derepRs  )
+mergersP  <- mergePairs(dadaPFs, derepFs, dadaPRs, derepRs)
+```
+
+# Creación de Tablas de Secuencias y Eliminación de Quimeras
+
+Construimos tablas de secuencias y eliminamos quimeras.
+
+```{r setup6, include=FALSE}
+# Tablas de secuencias
+seqtab    <- makeSequenceTable(mergers)
+seqtabP   <- makeSequenceTable(mergersP)
+
+# EliminaciC3n de quimeras en paralelo
+seqtab.nochim  <- removeBimeraDenovo(seqtab, method = "consensus",  verbose = TRUE)
+seqtab.nochimP <- removeBimeraDenovo(seqtabP, method = "consensus",  verbose = TRUE)
+
+```
+
+# Seguimiento de Lecturas
+
+Seguimos el número de lecturas a través del pipeline.
+```{r setup7, include=FALSE}
+
+# Seguimiento de lecturas a travC)s del pipeline
 getN <- function(x) sum(getUniques(x))
-track <- cbind(out, sapply(dadaFs, getN), sapply(dadaRs, getN), sapply(mergers, getN), rowSums(seqtab.nochim))
-
-getN <- function(x) sum(getUniques(x))
-trackP <- cbind(out, sapply(dadaPFs, getN), sapply(dadaPRs, getN), sapply(mergersP, getN), rowSums(seqtab.nochimP))
-
-# If processing a single sample, remove the sapply calls: e.g. replace sapply(dadaFs, getN) with getN(dadaFs)
-
-colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
+track  <- cbind(out,
+                sapply(dadaFs, getN),
+                sapply(dadaRs, getN),
+                sapply(mergers, getN),
+                rowSums(seqtab.nochim))
+colnames(track) <- c("input","filtered","denoisedF","denoisedR","merged","nonchim")
 rownames(track) <- sample.names
-head(track)
-track
 
-colnames(trackP) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
-
+trackP <- cbind(out,
+                sapply(dadaPFs, getN),
+                sapply(dadaPRs, getN),
+                sapply(mergersP, getN),
+                rowSums(seqtab.nochimP))
+colnames(trackP) <- c("input","filtered","denoisedF","denoisedR","merged","nonchim")
 rownames(trackP) <- sample.names
-head(trackP)
+
 trackP
-save(dadaFs, dadaRs, dadaPFs, dadaPRs, mergers, mergersP,
-     seqtab, seqtabP, seqtab.nochim, seqtab.nochimP,
-     track, trackP,
-     file = "dada2_resultados.RData")
 
 ```
 
-## 7. Asignación taxonómica con SILVA
+# Guardado de Resultados Intermedios
 
-```{r taxonomia}
-taxa <- assignTaxonomy(seqtab.nochim, 
-                       "G:/My Drive/Maestria/Base de Datos_ Secuenciacion/silva_nr99_v138.1_train_set.fa.gz",
-                       multithread=TRUE)
-taxa <- addSpecies(taxa,
-                   "G:/My Drive/Maestria/Base de Datos_ Secuenciacion/silva_species_assignment_v138.1.fa.gz")
+Guardamos los resultados para referencia futura.
+```{r setup8, include=FALSE}
+# Guardar resultados
+saveRDS(track, file = file.path(dir, "track_reads.rds"))
+saveRDS(trackP, file = file.path(dir, "track_reads_pooled.rds"))
+save.image(file = file.path(dir, "dada2_full_workspace.RData"))
 ```
 
-## 8. Crear objeto phyloseq
+# Asignación Taxonómica
 
-```{r phyloseq}
-ps <- phyloseq(otu_table(seqtab.nochim, taxa_are_rows=FALSE),
-               tax_table(taxa))
+Asignamos taxonomía utilizando la base de datos SILVA.
 
-sampledata <- data.frame(
-  sample = sample.names,
-  tratamiento = sapply(strsplit(sample.names, "_"), `[`, 1)
+```{r setup9, include=FALSE}
+#------------------------------------------------------------------------------------------------------
+###ASSIGN TAXONOMY### (corriC3 la de la carpeta databases de todos)
+
+# Ruta a la base de datos (descC!rgala previamente desde dada2 website)
+silva_ref <- "C:/Users/VladM/Documents/DEunir/1Cuatrim/seqyOmnics/Actividades/Actividad 3/seq_Act03WD_al03/Bases_Datos/silva_nr99_v138.1_train_set.fa.gz"
+taxa <- assignTaxonomy(seqtab.nochimP, silva_ref, multithread = nc)
+taxa <- addSpecies(taxa, "C:/Users/VladM/Documents/DEunir/1Cuatrim/seqyOmnics/Actividades/Actividad 3/seq_Act03WD_al03/Bases_Datos/silva_species_assignment_v138.1.fa.gz") # Opcional
+
+# Guardar la tabla taxonC3mica
+saveRDS(taxa, file = file.path(dir, "taxa_assignments.rds"))
+```
+
+# Creación del Objeto Phyloseq
+
+Creamos un objeto phyloseq con las secuencias, taxonomía y metadatos.
+```{r setup10, include=FALSE}
+library(phyloseq)
+library(ggplot2)
+
+meta <- read.csv("C:/Users/VladM/Documents/DEunir/1Cuatrim/seqyOmnics/Actividades/Actividad 3/seq_Act03WD_al03/metadatos.csv", ,
+                                    row.names  = 1,
+                                    fileEncoding = "UTF-16LE",
+                                    stringsAsFactors = FALSE,
+                                    na.strings = c("", "NA"),
+                                    strip.white = TRUE) 
+sample_data(ps)
+
+# luego incorporar a phyloseq:
+ps <- phyloseq(
+  otu_table(seqtab.nochimP, taxa_are_rows = FALSE),
+  tax_table(taxa),
+  sample_data(meta)
 )
-rownames(sampledata) <- sample.names
-sample_data(ps) <- sampledata
 ```
 
-## 9. Abundancia relativa por Phylum
+# Análisis de Abundancia Relativa
 
-```{r abundancia}
-ps_rel <- transform_sample_counts(ps, function(x) x / sum(x))
+Analizamos y visualizamos la abundancia relativa por diferentes niveles taxonómicos.
 
-plot_bar(ps_rel, x="tratamiento", fill="Phylum") +
+## Abundancia por Phylum
+
+```{r setup11-1, include=FALSE}
+# Transformar a abundancia relativa
+ps_rela <- transform_sample_counts(ps, function(x) x / sum(x))
+sample_data(ps_rela)
+
+df_abund <- phyloseq::psmelt(ps) 
+colnames(df_abund)
+
+
+ggplot(df_abund, aes(x = Phylum, y = Abundance, fill = Phylum)) +
+  geom_bar(stat = "identity", position = "stack") +
+  facet_wrap(~Condicion.clinica, scales = "free_x") +
   theme_minimal() +
-  labs(title="Abundancia relativa por Phylum")
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Abundancia relativa por Phylum según grupo",
+       x = "Phylum",
+       y = "Abundancia relativa")
+ps_rela <- transform_sample_counts(ps, function(x) x / sum(x))
+
 ```
 
-## 10. Diversidad Alfa
+## Top 10 Géneros Más Abundantes
+```{r setup11-2, include=FALSE}
 
-```{r alfa}
-plot_richness(ps, x="tratamiento", measures=c("Shannon", "Observed", "Simpson")) +
-  theme_minimal()
+# Sumar por gC)nero
+tax_table(ps_rela)[, "Genus"] <- as.character(tax_table(ps_rela)[, "Genus"])  # Asegura que sea texto
+ps_genus <- tax_glom(ps_rela, taxrank = "Genus")  # Agrupa por Genus
 
-alpha_div <- estimate_richness(ps)
-alpha_div$tratamiento <- sample_data(ps)$tratamiento
-kruskal.test(Shannon ~ tratamiento, data=alpha_div)
-```
+# Seleccionar los 10 mC!s abundantes
+top10 <- names(sort(taxa_sums(ps_genus), decreasing = TRUE))[1:8]   # de 10 a 8
+ps_top10 <- prune_taxa(top10, ps_genus)
+df_genus <- psmelt(ps_top10)
 
-## 11. Diversidad Beta y PCoA
-
-```{r beta}
-ordu <- ordinate(ps, method="PCoA", distance="bray")
-plot_ordination(ps, ordu, color="tratamiento") +
-  geom_point(size=4) +
+ggplot(df_genus, aes(x = Sample, y = Abundance, fill = Genus)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~Condicion.clinica, scales = "free_x") +
   theme_minimal() +
-  labs(title="PCoA - Bray-Curtis")
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Top 10 géneros más abundantes por condición clínica",
+       x = "Muestra",
+       y = "Abundancia relativa")
+
+
+
 ```
 
-## 12. PERMANOVA
-
-```{r permanova}
-otu_mat <- as(otu_table(ps), "matrix")
-otu_mat <- otu_mat[rowSums(otu_mat) > 0, ]
-sample_df <- data.frame(sample_data(ps))
-adonis2(vegdist(otu_mat, method="bray") ~ tratamiento, data=sample_df)
-```
-
-## 13. Curvas de Rarefacción
-
-```{r rarefaccion}
-raremax <- min(rowSums(otu_mat))
-rarecurve_result <- rarecurve(otu_mat, step=100, sample=raremax, label=FALSE)
-
-rare_df <- bind_rows(lapply(1:length(rarecurve_result), function(i) {
-  data.frame(
-    Reads = attr(rarecurve_result[[i]], "Subsample"),
-    Richness = rarecurve_result[[i]],
-    Sample = names(rarecurve_result)[i],
-    Tratamiento = sample_data(ps)$tratamiento[match(names(rarecurve_result)[i], rownames(sample_data(ps)))]
+## Abundancia Relativa por Género
+```{r setup11-3, include=FALSE}
+plot_bar(ps_rela, fill = "Genus") +
+  facet_wrap(~Condicion.clinica, scales = "free_x") +
+  theme(
+    axis.text.x = element_text(angle = 50)
+  ) +
+  labs(
+    title = "Abundancia relativa por Género"
   )
-}))
+```
 
-ggplot(rare_df, aes(x=Reads, y=Richness, color=Tratamiento, group=Sample)) +
-  geom_line(size=1) +
+## Top 10 Especies Más Abundantes
+```{r setup11-4, include=FALSE}
+#Plot abundancia relativa especies
+
+tax_table(ps)[, "Species"] <- as.character(tax_table(ps)[, "Species"])
+ps_species <- tax_glom(ps_rela, taxrank = "Species")
+
+df_all_species <- psmelt(ps_species)
+top10_species <- names(sort(taxa_sums(ps_species), decreasing = TRUE))[1:8]
+ps_species_top10 <- prune_taxa(top10_species, ps_species)
+df_top_species <- psmelt(ps_species_top10)
+
+ggplot(df_top_species, aes(x = Sample, y = Abundance, fill = Species)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~Condicion.clinica, scales = "free_x") +
   theme_minimal() +
-  labs(title="Curvas de Rarefacción",
-       x="Número de lecturas",
-       y="ASVs observadas")
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(title = "Top 10 especies más abundantes por condición clínica",
+       x = "Muestra",
+       y = "Abundancia relativa")
+
+```
+
+# Curva de Rarefacción
+```{r setup12, include=FALSE}
+# --- CURVA DE RAREFACCIÓN ---
+
+library("devtools")
+library("vegan")
+otu_mat <- as(otu_table(ps), "matrix")
+if(taxa_are_rows(ps)) { otu_mat <- t(otu_mat) }
+rarecurve(otu_mat, step = 1000, col = "blue", cex = 0.6, label = TRUE)
+```
+
+# Análisis de Diversidad
+
+Calculamos y visualizamos las diversidades alfa y beta.
+
+## Diversidad Alfa
+```{r setup13-1, include=FALSE}
+# --- DIVERSIDAD ALFA Y BETA ---
+diversidad <- estimate_richness(ps)
+plot_richness(ps, x = "Condicion.clinica", measures = c("Shannon", "Observed"))
+```
+
+## Diversidad Beta (PCoA)
+```{r setup13-2, include=FALSE}
+# Distancia Bray-Curtis y MDS
+ordu <- ordinate(ps, method = "PCoA", distance = "bray")
+plot_ordination(ps, ordu, color = "Condicion.clinica") + geom_point(size = 3)
+```
+
+## PERMANOVA
+```{r setup13-3, include=FALSE}
+# PERMANOVA
+metadata <- data.frame(sample_data(ps))
+bray_dist <- phyloseq::distance(ps, method = "bray")
+adonis_result <- adonis2(bray_dist ~ Condicion.clinica, data = metadata)
+print(adonis_result)
 ```
